@@ -110,16 +110,22 @@ def get_microphone_device():
 async def blink_led(frequency=1):
     try:
         while True:
-            with open(os.path.join(LED_PATH, "brightness"), "w") as led:
-                led.write("1")
+            try:
+                os.system(f"echo 1 | sudo tee {os.path.join(LED_PATH, 'brightness')}")
+            except Exception as e:
+                return
             await asyncio.sleep(frequency)
-            with open(os.path.join(LED_PATH, "brightness"), "w") as led:
-                led.write("0")
+            try:
+                os.system(f"echo 0 | sudo tee {os.path.join(LED_PATH, 'brightness')}")
+            except Exception as e:
+                return
             await asyncio.sleep(frequency)
-    except KeyboardInterrupt:
-        with open(os.path.join(LED_PATH, "trigger"), "w") as led:
-            led.write("mmc0")
-            
+    except asyncio.CancelledError:
+        try:
+            os.system(f"echo mmc0 | sudo tee {os.path.join(LED_PATH, 'trigger')}")
+        except Exception as e:
+        raise
+          
 def restart_script():
     print("Restarting script...")
     os.execv(sys.executable, ['python3'] + sys.argv)
@@ -237,13 +243,17 @@ async def main():
                     restart_script()
                 else:
                     update_display(line5="TAGGING!")
+                    led_task.cancel()
                     await analyze_and_email()
                     restart_script()
             else:
                 update_display(line5="RECORDING!")
+                led_task.cancel()
                 device = get_microphone_device()
                 record_and_process_audio(device)
                 update_display(line4="PUSH!")
+                led_task.cancel()
+                led_task = asyncio.create_task(blink_led())
         await asyncio.sleep(0.1)
 
 if __name__ == "__main__":
