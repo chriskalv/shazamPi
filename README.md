@@ -89,10 +89,10 @@ sudo apt-get install sox -y
 /var/shazampi/new_recordings_posteq
 ```
 7. Transfer the display font (`swift.ttf`) and my script (`shazampi.py`) into `/var/shazampi/`. I always use FileZilla SSH for this, but there are many ways to do this.
-8. Edit access permissions for the shazampi folder and the system LED directory by entering:
+8. Edit access permissions for the shazampi folder and the system LED directory by entering the following. However, be careful as the ACT folder might differ in different PiOS versions.
 ```python
 sudo chmod -R 777 /var/shazampi
-sudo chmod -R 777 /sys/class/leds
+sudo chmod -R 777 /sys/class/leds/ACT
 ```
 9. Edit the global settings (like eMail configuration etc.) at the top of `shazampi.py` to your liking and save the file.
 10. Adjust the microphone input signal by executing `sudo alsamixer` if you plan on using the device in a very high volume environment.
