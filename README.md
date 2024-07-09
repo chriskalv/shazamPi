@@ -102,11 +102,30 @@ sudo chmod -R 777 /sys/class/leds
    - Disable HDMI input/output
    - Disable bluetooth
    - You can also throttle the CPU, but I personally think this is only necessary if you have hard battery constraints
-12. Make `shazampi.py` execute on bootup. There are [many ways](https://www.dexterindustries.com/howto/run-a-program-on-your-raspberry-pi-at-startup/) to do this and one way can be achieved by adding these lines to /etc/rc.local (`sudo nano /etc/rc.local`):
-```python
-sudo python3 /var/shazampi/shazampi.py &
-exit 0
-```
-13. After that, add the permission to execute rc.local by entering `sudo chmod +x /etc/rc.local`.
-14. Reboot. You're done.
+12. Make `shazampi.py` execute on bootup. There are [many ways](https://www.dexterindustries.com/howto/run-a-program-on-your-raspberry-pi-at-startup/) to do this and one way can be achieved by creating a systemd service file:
+   - Enter `sudo nano /etc/systemd/system/shazampi.service`.
+   - Paste this:
+     ```
+     [Unit]
+      Description=Shazampi Script
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/bin/python3 /var/shazampi/shazampi.py
+      WorkingDirectory=/var/shazampi/
+      StandardOutput=inherit
+      StandardError=inherit
+      Restart=always
+      User=shazampi
+      Environment=PYTHONUNBUFFERED=1
+
+      [Install]
+      WantedBy=multi-user.target```
+   - Enable and start the service by executing
+      ```
+      sudo systemctl daemon-reload
+      sudo systemctl enable shazampi.service
+      sudo systemctl start shazampi.service
+      ```
+13. Reboot and verify. You're done.
 
