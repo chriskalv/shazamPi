@@ -3,74 +3,101 @@
 ############# BY CK ##############
 ##################################
 
-# --------------------------------
-# --------Global settings---------
-# Email data for shazam logs:
-enable_email = "false"
-email_origin = "asdfasdf@gmail.com"
-email_password = "asdfasdf"
-email_targets = ["asdfasdf@gmail.com", "qwerqwer@gmail.com"]
-# File directories for new recordings, already analyzed recordings and log files:
-newrec_path = "/var/shazampi/new_recordings/"
-newrec_path_posteq = "/var/shazampi/new_recordings_posteq/"
-oldrec_path_posteq = "/var/shazampi/old_recordings_posteq/"
-log_path = "/var/shazampi/analysis_logs/"
-# Recording preferences (length of recorded files in seconds and sampling rate in hz):
-record_seconds = "16"
-record_samplingrate = "96000"
-record_format = "S32_LE"
-extension = ".wav"
-# Used GPIO pins for button and LED communication
+# GLOBAL SETTINGS
+# --> EMAIL
+EMAIL_ENABLED = False
+EMAIL_ORIGIN = "asdfasdf@gmail.com"
+EMAIL_PASSWORD = "asdfasdf"
+EMAIL_TARGETS = ["asdfasdf@gmail.com", "qwerqwer@gmail.com"]
+# --> DIRECTORIES
+NEWREC_PATH = "/var/shazampi/new_recordings/"
+NEWREC_PATH_POSTEQ = "/var/shazampi/new_recordings_posteq/"
+OLDREC_PATH = "/var/shazampi/old_recordings/"
+OLDREC_PATH_POSTEQ = "/var/shazampi/old_recordings_posteq/"
+LOG_PATH = "/var/shazampi/analysis_logs/"
+FONT_PATH = "/var/shazampi/swift.ttf"
+# --> RECORDING PARAMETERS (check linux.die.net/man/1/sox for syntax)
+RECORD_SECONDS = 16
+RECORD_SAMPLING_RATE = 96000
+RECORD_FORMAT = "S32_LE"
+EXTENSION = ".wav"
+# --> GPIO PINS
 BUTTON_PIN = 10
 LED_PIN = 17
-# --------------------------------
+# --> ONBOARD LED PATH (check /sys/class/leds/ and see if the folder for your ACT LED is named ACT, led0, led1 or act_led)
+LED_PATH = "/sys/class/leds/ACT"
 
-# Libraries and global variables for...
-# ...internet connection check
+# Libraries
+import os
 import socket
-# ...file identification/paths
-import os, os.path
-import fnmatch
-# ...self-restart functionality
 import sys
-# ...time (logging & timestamps for files)
 import time
 import datetime
-# ...shazam functionality
 import asyncio
-from shazamio import Shazam
-# ...email reporting
-import smtplib
-import glob
-# ...recording functionality
 import subprocess
 import re
-# ...button functionality
-import RPi.GPIO as GPIO
+import smtplib
+import glob
+from shazamio import Shazam
+from RPi import GPIO
+import busio
+from PIL import Image, ImageDraw, ImageFont
+import adafruit_ssd1306
+from board import SCL, SDA
 
+# Handle button and LED
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(LED_PIN, GPIO.OUT)
-
-# Switch off LED
 GPIO.output(LED_PIN, GPIO.LOW)
 
-# Check internet connection for two seconds
+# Create the I2C interface and OLED display
+i2c = busio.I2C(SCL, SDA)
+disp = adafruit_ssd1306.SSD1306_I2C(128, 32, i2c)
+disp.fill(0)
+disp.show()
+disp.contrast(0)
+
+width, height = disp.width, disp.height
+image = Image.new("1", (width, height))
+draw = ImageDraw.Draw(image)
+
+def update_display(line1="", line2="", line3="", line4="", line5=""):
+    draw.rectangle((0, 0, width, height), outline=0, fill=0)
+    draw.text((0, -5), line1, font=ImageFont.truetype(FONT_PATH, 9), fill=255)
+    draw.text((0, 11), line2, font=ImageFont.truetype(FONT_PATH, 8), fill=255)
+    draw.text((0, 21), line3, font=ImageFont.truetype(FONT_PATH, 8), fill=255)
+    draw.text((3, -14), line4, font=ImageFont.truetype(FONT_PATH, 33), fill=255)
+    draw.text((-1, 0), line5, font=ImageFont.truetype(FONT_PATH, 17), fill=255)
+    disp.image(image)
+    disp.show()
+
 def is_internet_connected():
     try:
         socket.create_connection((socket.gethostbyname("www.google.com"), 80), 2)
         return True
     except OSError:
-        pass
-    return False
+        return False
+    
+def get_ip_address():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.connect(('10.254.254.254', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = 'No IP'
+    finally:
+        s.close()
+    return IP
 
-# Get device number of the USB microphone
+def get_device_name():
+    return socket.gethostname()
+
 def get_microphone_device():
     try:
         result = subprocess.run(['arecord', '-l'], capture_output=True, text=True)
         output = result.stdout
-
-        # Look for the "USB Microphone" entry
         matches = re.findall(r'card (\d+): (.*)\[(.*)\], device (\d+):', output)
         for match in matches:
             card, name, long_name, device = match
@@ -80,188 +107,144 @@ def get_microphone_device():
         print(f"Error while looking for microphone: {e}")
     return None
 
-# Make the button LED blink
-async def blink_led(duration, interval):
+async def blink_led(frequency=1):
     try:
         while True:
-            GPIO.output(LED_PIN, GPIO.HIGH)
-            await asyncio.sleep(duration)
-            GPIO.output(LED_PIN, GPIO.LOW)
-            await asyncio.sleep(interval)
-    except asyncio.CancelledError:
-        GPIO.output(LED_PIN, GPIO.LOW)
+            with open(os.path.join(LED_PATH, "brightness"), "w") as led:
+                led.write("1")
+            await asyncio.sleep(frequency)
+            with open(os.path.join(LED_PATH, "brightness"), "w") as led:
+                led.write("0")
+            await asyncio.sleep(frequency)
+    except KeyboardInterrupt:
+        with open(os.path.join(LED_PATH, "trigger"), "w") as led:
+            led.write("mmc0")
+            
+def restart_script():
+    print("Restarting script...")
+    os.execv(sys.executable, ['python3'] + sys.argv)
 
-# Record and equalize audio
 def record_and_process_audio(device):
     if not device:
         print("No microphone found.")
         return
-    
-    # LED einschalten
-    GPIO.output(LED_PIN, GPIO.HIGH)
-    print("LED has been switched on.")
-    
-    # Reset counters
-    newrec_file_counter = 0
-    
-    # Iterate through files with audio extension in 'new_recordings' directory, count them, and set filename for new recording file + define in-/output variables
-    for files in os.listdir(newrec_path):
-        if files.endswith(extension):
-            newrec_file_counter += 1     
-    recoutput_filename = "track_" + str(newrec_file_counter + 1) + extension
-    input_wav = newrec_path + recoutput_filename
-    output_wav = newrec_path_posteq + recoutput_filename
 
-    # Record audio  
-    record_command = ["arecord", "-D", device, "-d", record_seconds, "-f", record_format, "-r", record_samplingrate, input_wav]
+    GPIO.output(LED_PIN, GPIO.HIGH)
+    newrec_file_counter = len([f for f in os.listdir(NEWREC_PATH) if f.endswith(EXTENSION)])
+    recoutput_filename = f"track_{newrec_file_counter + 1}{EXTENSION}"
+    input_wav = os.path.join(NEWREC_PATH, recoutput_filename)
+    output_wav = os.path.join(NEWREC_PATH_POSTEQ, recoutput_filename)
+
+    record_command = ["arecord", "-D", device, "-d", str(RECORD_SECONDS), "-f", RECORD_FORMAT, "-r", str(RECORD_SAMPLING_RATE), input_wav]
     subprocess.run(record_command)
-    print(f"Recording has been saved to {newrec_path}.")
-    
-    # Reduce bass from the source file with sox
+    print(f"Recording has been saved to {NEWREC_PATH}.")
+
     sox_command = ["sox", input_wav, output_wav, "bass", "-24", "100"]
     subprocess.run(sox_command)
-    print(f"Recording has been equalized and saved to {newrec_path_posteq}.")
-    
-    # Switch off LED
-    GPIO.output(LED_PIN, GPIO.LOW)
-    print("LED has been switched off.")
-    
-async def analyze_and_email():
-    # Start LED blinking
-    blink_task = asyncio.create_task(blink_led(duration=0.2, interval=0.2))
-    
-    # Load shazam and reset counters
-    shazam = Shazam()
-    newrec_file_counter = 0
-    current_id_counter = 0
-    current_success_counter = 0
-    
-    # Delete all files in 'new_recordings'
-    for files in os.listdir(newrec_path):
-        del_filepath = os.path.join(newrec_path, files)
-        if os.path.isfile(del_filepath):
-            os.remove(del_filepath)
-    
-    # Iterate through files with audio extension in 'new_recordings_posteq' directory, count, and print the result
-    for files in os.listdir(newrec_path_posteq):
-        if files.endswith(extension):
-            newrec_file_counter += 1
+    print(f"Recording has been equalized and saved to {NEWREC_PATH_POSTEQ}.")
 
-    if newrec_file_counter >= 2:
-        print("Analyzing " + str(newrec_file_counter) + " Tracks. Be patient.")
-    elif newrec_file_counter == 1:
-        print("Analyzing " + str(newrec_file_counter) + " Track.")
-    else:
+    GPIO.output(LED_PIN, GPIO.LOW)
+
+def extract_track_number(filename):
+    match = re.search(r'track_(\d+)', filename)
+    return int(match.group(1)) if match else float('inf')
+
+async def analyze_and_email():
+    GPIO.output(LED_PIN, GPIO.HIGH)
+    shazam = Shazam()
+    files_to_analyze = sorted([f for f in os.listdir(NEWREC_PATH_POSTEQ) if f.endswith(EXTENSION)], key=extract_track_number)
+    newrec_file_counter = len(files_to_analyze)
+
+    if newrec_file_counter == 0:
         print("There are no files to be analyzed.")
-        # Stop LED blinking
-        blink_task.cancel()
-        try:
-            await blink_task
-        except asyncio.CancelledError:
-            pass
+        GPIO.output(LED_PIN, GPIO.LOW)
         return
-        
-    # Get current time
+
+    print(f"Analyzing {newrec_file_counter} Track{'s' if newrec_file_counter > 1 else ''}. Be patient.")
     current_date = datetime.datetime.now().strftime("%d.%m.%Y")
     current_time = datetime.datetime.now().strftime("%H:%M:%S")
-    current_timestamp = current_date + ", " + current_time
-    
-    # Create log file
-    file = open(log_path + "logfile [" + current_timestamp + "].txt", "w")
-    file.write("SHAZAM ANALYSIS LOG\n\nDate: " + current_date + "\nTime: " + current_time + "\n\n\n")
-    
-    # Iterate through files with audio extension in 'new_recordings_posteq' directory for shazam analysis
-    for files in os.listdir(newrec_path_posteq):
-        if files.endswith(extension):
-            # Count attempts
+    current_timestamp = f"{current_date}, {current_time}"
+
+    log_file_path = os.path.join(LOG_PATH, f"logfile [{current_timestamp}].txt")
+    with open(log_file_path, "w") as file:
+        file.write(f"SHAZAM ANALYSIS LOG\n\nDate: {current_date}\nTime: {current_time}\n\n\n")
+
+        current_id_counter = 0
+        current_success_counter = 0
+
+        for filename in files_to_analyze:
             current_id_counter += 1
-            # Update current timestamp
-            current_timestamp_with_ms = datetime.datetime.now().strftime("%d.%m.%Y") + ", " + datetime.datetime.now().strftime("%H:%M:%S.%f")[:-5]
-            # Get shazam data
-            alldata = await shazam.recognize(newrec_path_posteq + files)
-            # Check if song has been identified
+            creation_time = datetime.datetime.fromtimestamp(os.path.getmtime(os.path.join(NEWREC_PATH_POSTEQ, filename))).strftime("%d.%m.%Y, %H:%M")
+            alldata = await shazam.recognize(os.path.join(NEWREC_PATH_POSTEQ, filename))
+
             if 'track' in alldata:
-                # Get artist and track data
                 trackdata = alldata['track']
-                trackid = trackdata['subtitle'] + " - " + trackdata['title']
-                # Move file from 'new_recordings_posteq' to 'old_recordings_posteq' directory and rename to Track ID
-                os.replace(newrec_path_posteq + files, oldrec_path_posteq + trackid + " [Analyzed " + current_timestamp_with_ms + "]" + extension)
-                # Count your successes
+                trackid = f"{trackdata['subtitle']} - {trackdata['title']}"
+                os.replace(os.path.join(NEWREC_PATH_POSTEQ, filename), os.path.join(OLDREC_PATH_POSTEQ, f"{trackid} [Analyzed {creation_time}]{EXTENSION}"))
+                os.replace(os.path.join(NEWREC_PATH, filename), os.path.join(OLDREC_PATH, f"{trackid} [Analyzed {creation_time}]{EXTENSION}"))
                 current_success_counter += 1
-                # Write to log file and print current analysis status
-                file.write("Track " + str(current_id_counter) + "/" + str(newrec_file_counter) + ": " + trackid + "\n")
-                print("Track " + str(current_id_counter) + "/" + str(newrec_file_counter) + " found: " + trackid)
+                file.write(f"Track {current_id_counter} [{creation_time} - {filename}] has been tagged: \n{trackid}\n\n")
+                print(f"Track {current_id_counter} of {newrec_file_counter} analyzed: \n{trackid}\n")
             else:
-                # Move file from 'new_recordings_posteq' to 'old_recordings_posteq' directory and rename to "Unidentified"
-                os.replace(newrec_path_posteq + files, oldrec_path_posteq + "Unidentified Track [Analyzed " + current_timestamp_with_ms + "]" + extension)
-                # Write to log file and print current analysis status
-                file.write("Track " + str(current_id_counter) + "/" + str(newrec_file_counter) + ": Not found. \n")
-                print("Track " + str(current_id_counter) + "/" + str(newrec_file_counter) + " not found.")
-        else:
-            continue
-        
-    # Write final status report to file and close it
-    if current_id_counter >= 2:
-        file.write("\n\nAnalysis Summary: " + str(current_success_counter) + " of " + str(current_id_counter) + " Tracks have been identified.")
-        print("Analysis Summary: " + str(current_success_counter) + " of " + str(current_id_counter) + " Tracks have been identified.")
-    else:
-        file.write("\n\nAnalysis Summary: One Track has been identified.")
-        print("Analysis Summary: One Track has been identified.")
-    file.close()
-    print(f"Log file has been saved to {log_path}.")
-    
-    # Send analysis log via email
-    if enable_email == "true":
-        # Get the textual content of the newest log file and paste it into a variable
-        time.sleep(0.5)
-        logfiles = list(filter(os.path.isfile, glob.glob(log_path + "*")))
-        logfiles.sort(key=lambda x: os.path.getmtime(x))
+                os.replace(os.path.join(NEWREC_PATH_POSTEQ, filename), os.path.join(OLDREC_PATH_POSTEQ, f"{filename} [unidentified]"))
+                os.replace(os.path.join(NEWREC_PATH, filename), os.path.join(OLDREC_PATH, f"{filename} [unidentified]"))
+                file.write(f"Track {current_id_counter} [{creation_time} - {filename}] could not be identified.\n\n")
+                print(f"Track {current_id_counter} of {newrec_file_counter} could not be identified.\n")
+                
+                    
+        file.write(f"\n\nThe analysis has been completed.\n\n{current_success_counter} of {newrec_file_counter} tracks have been identified.")
+        print(f"The analysis has been completed.\n\n{current_success_counter} of {newrec_file_counter} tracks have been identified.")
+
+    if EMAIL_ENABLED:
+        await asyncio.sleep(0.5)
+        logfiles = sorted(glob.glob(os.path.join(LOG_PATH, "*")), key=os.path.getmtime)
         newest_logfile_path = logfiles[-1]
+
         with open(newest_logfile_path, "r") as file:
             filecontent = file.read()
-            
-        # Send the contents of the newly filled variable by email using a gmail account
-        subject = "Shazam Analyse vom " + current_date + " um " + current_time
+
+        subject = f"Shazam Analysis from {current_date} at {current_time}"
         service = smtplib.SMTP('smtp.gmail.com', 587)
         service.starttls()
-        service.login(email_origin, email_password)
-        service.sendmail(email_origin, email_targets, f"Subject: {subject}\n{filecontent}")
-        service.quit
-        print("Log file has been sent to " + email_targets + ".")
-    else:
-        print("Log file has not been sent via eMail.")
-    
-    # Stop LED blinking
-    blink_task.cancel()
-    try:
-        await blink_task
-    except asyncio.CancelledError:
-        pass
+        service.login(EMAIL_ORIGIN, EMAIL_PASSWORD)
+        message = f"Subject: {subject}\n\n{filecontent}"
+        service.sendmail(EMAIL_ORIGIN, EMAIL_TARGETS, message)
+        service.quit()
+        print(f"Log file has been sent to {EMAIL_TARGETS}.")
+
+    GPIO.output(LED_PIN, GPIO.LOW)
+    restart_script()
 
 async def main():
-    try:
-        print("Button is ready.")
-        while True:
-            button_state = GPIO.input(BUTTON_PIN)
-            if button_state == GPIO.LOW:
-                print("Button has been pressed.")
-                if is_internet_connected():
-                    print("Connected to the internet.")
-                    await analyze_and_email()
-                else:
-                    print("Not connected to the internet.")
-                    device = get_microphone_device()
-                    record_and_process_audio(device)
-                print("Button is ready.")
-                # Prohibit button-mashing
-                time.sleep(1)
-            # Reduce CPU load
-            time.sleep(0.1)  
-    except KeyboardInterrupt:
-        print("Program aborted.")
-    finally:
-        GPIO.cleanup()
+    led_task = asyncio.create_task(blink_led())
+    
+    if is_internet_connected():
+        ip_address = get_ip_address()
+        device_name = get_device_name()
+        files_number = len([f for f in os.listdir(NEWREC_PATH_POSTEQ) if os.path.isfile(os.path.join(NEWREC_PATH_POSTEQ, f))])
+        trackspelling = "TRACKS" if files_number != 1 else "TRACK"
+        smiley = ":)" if files_number > 0 else ":("
+        update_display(line1=f"{files_number if files_number > 0 else 'NO'} NEW {trackspelling} {smiley}", line2=f"IP: {ip_address}", line3=f"Name: {device_name}")
+    else:
+        update_display(line4="PUSH!")
 
-# Start the async main function
+    while True:
+        if GPIO.input(BUTTON_PIN) == GPIO.LOW:
+            if is_internet_connected():
+                if files_number < 1:
+                    update_display(line1="NOTHING TO TAG!", line2=f"IP: {ip_address}", line3=f"Name: {device_name}")
+                    await asyncio.sleep(5)
+                    restart_script()
+                else:
+                    update_display(line5="TAGGING!")
+                    await analyze_and_email()
+                    restart_script()
+            else:
+                update_display(line5="RECORDING!")
+                device = get_microphone_device()
+                record_and_process_audio(device)
+                update_display(line4="PUSH!")
+        await asyncio.sleep(0.1)
+
 if __name__ == "__main__":
     asyncio.run(main())
