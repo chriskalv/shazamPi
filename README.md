@@ -116,7 +116,7 @@ sudo chmod -R 777 /sys/class/leds/ACT
       StandardOutput=inherit
       StandardError=inherit
       Restart=always
-      User=shazampi
+      User=root
       Environment=PYTHONUNBUFFERED=1
 
       [Install]
